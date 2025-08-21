@@ -1,28 +1,66 @@
+// this program is heaviliy inspired by the readline example
+// project fileman.c under section 2.6.4 of the manual:
+// https://tiswww.case.edu/php/chet/readline/readline.html#A-Short-Completion-Example-1
+// License: GNU General Public License (https://www.gnu.org/licenses/gpl-3.0.html)
+
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sqlite3.h>
+#include <readline/readline.h>
+#include <readline/history.h>
 
-int input(char *str, size_t size);
-void trim(char *str);
-
-int command_create(sqlite3 *db);
-int command_search(sqlite3 *db, char *raw_line, size_t raw_line_size);
+#define UNUSED(x) ((void) (x))
 
 typedef struct {
-  char *name;
+	char *name;
+	rl_icpfunc_t *func;
+	char *doc;
+} Command;
+
+typedef struct {
+	char *name;
 	char *address;
 	char *mobile_phone;
 	char *house_phone;
 	char *description;
 } Entry;
 
+char *dupstr(char *);
+char *stripwhite(char *);
+
+Command *cli_find_command(char *);
+int cli_execute(char *);
+char **cli_completor(const char *, int, int);
+char *cli_command_generator(const char *, int);
+
+int cmd_help(char *);
+int cmd_quit(char *);
+int cmd_search(char *);
+int cmd_create(char *);
+int cmd_edit(char *);
+int cmd_remove(char *);
+
+static sqlite3 *db;
+
+Command commands[] = {
+	{ "h", cmd_help,   "Print help page" },
+	{ "q", cmd_quit,   "Quit" },
+	{ "s", cmd_search, "Search for records" },
+	{ "c", cmd_create, "Create a new record" },
+	{ "e", cmd_edit,   "Edit a record" },
+	{ "r", cmd_remove, "Remove a record" },
+	{ (char*) NULL, (rl_icpfunc_t*) NULL, (char*) NULL }
+};
+
 // FIXME:
 // NOTE: This program is currently vulnerable to SQL-injection.
 int main()
 {
-	sqlite3 *db;
+	rl_readline_name = "ppl";
+	rl_attempted_completion_function = cli_completor;
+
 	if (sqlite3_open("storage.db", &db) != SQLITE_OK) {
 		printf("Error: %s", sqlite3_errmsg(db));
 		return 1;
@@ -42,63 +80,270 @@ int main()
 
 	printf("\n\tWelcome to PPL.\n\t(enter `h` to show all available commands)\n\n");
 
+	char *line, *s;
 	do {
-		printf("(main) > ");
-		char raw_line[64];
-		char *command;
+		line = readline("(main) > ");
 
-		if (input(raw_line, sizeof(raw_line)) != 0) continue;
-		if (strlen(raw_line) < 1) continue;
+		if (!line)
+			continue;
 
-		command = strtok(raw_line, " ");
+		s = stripwhite(line);
 
-		if (strcmp(command, "q") == 0) {
-			break;
-		} else if (strcmp(command, "h") == 0) {
-			printf(
-					"\n"
-					"\th - Print help page with all commands\n"
-					"\tq - Quit\n"
-					"\n"
-					"\ts - Search for records in the database\n"
-					"\tc - Create a new record in the database\n"
-					"\te - Edit a record in the database\n"
-					"\tr - Remove a record from the database\n"
-					"\n"
-			);
-		} else if (strcmp(command, "s") == 0) {
-			if (command_search(db, raw_line, sizeof(raw_line)) != 0) continue;
-		} else if (strcmp(command, "c") == 0) {
-			if (command_create(db) != 0) continue;
+		if (*s) {
+			int res = cli_execute(s);
+			if (res == -1) {
+				free(line);
+				break;
+			}
+
+			if (res == 0)
+				add_history(s);
 		}
-		// TODO: commands: e, r
+
+		free(line);
 	} while (true);
 
 	sqlite3_close(db);
 	return 0;
 }
 
-int command_create(sqlite3 *db)
+/* **************************************************************** */
+/*                                                                  */
+/*                   Command Line Interface (CLI)                   */
+/*                                                                  */
+/* **************************************************************** */
+
+Command *cli_find_command(char *name)
 {
-	printf("\n\tEnter Name: ");
-	char name[32];
-	if (input(name, sizeof(name)) != 0) return 1;
+	register int i;
 
-	printf("\tEnter Address: ");
-	char address[128];
-	if (input(address, sizeof(address)) != 0) return 1;
+	for (i = 0; commands[i].name; i++)
+		if (strcmp(name, commands[i].name) == 0)
+			return &commands[i];
 
-	printf("\tEnter Mobile Number: ");
-	char mobile[32];
-	if (input(mobile, sizeof(mobile)) != 0) return 1;
+	return NULL;
+}
 
-	printf("\tEnter House Phone Number: ");
-	char home[32];
-	if (input(home, sizeof(home)) != 0) return 1;
+int cli_execute(char *line)
+{
+	register int i;
+	Command *command;
+	char *word;
 
-	printf("\tEnter Description: ");
-	char description[1024];
-	if (input(description, sizeof(description)) != 0) return 1;
+	i = 0;
+	while (line[i] && whitespace(line[i]))
+		i++;
+	word = line + i;
+
+	while (line[i] && !whitespace(line[i]))
+		i++;
+
+	if (line[i])
+		line[i++] = '\0';
+
+	command = cli_find_command(word);
+
+	if (!command)
+		return 1;
+
+	while (whitespace(line[i]))
+		i++;
+	word = line + i;
+
+	return (*(command->func)) (word);
+}
+
+char **cli_completor(const char *text, int start, int end)
+{
+	(void) (end);
+
+	char **matches = NULL;
+
+	if (start == 0)
+		matches = rl_completion_matches(text, cli_command_generator);
+
+	return matches;
+}
+
+char *cli_command_generator(const char *text, int state)
+{
+	static int list_index, len;
+	char *name;
+
+	if (!state) {
+		list_index = 0;
+		len = strlen(text);
+	}
+
+	while ((name = commands[list_index].name) != NULL) {
+		list_index++;
+
+		if (strncmp(name, text, len) == 0)
+			return dupstr(name);
+	}
+
+	return NULL;
+}
+
+/* **************************************************************** */
+/*                                                                  */
+/*                         Uility Functions                         */
+/*                                                                  */
+/* **************************************************************** */
+
+char *dupstr(char *text)
+{
+	int len = strlen(text) + 1;
+	char *r;
+	r = malloc(len);
+	strncpy(r, text, len);
+	return r;
+}
+
+char *stripwhite(char *text)
+{
+	register char *s, *t;
+
+	for (s = text; whitespace(*s); s++)
+		;
+
+	if (*s == 0)
+		return s;
+
+	t = s + strlen(s) - 1;
+	while (t > s && whitespace(*t))
+		t--;
+	*++t = '\0';
+
+	return s;
+}
+
+/* **************************************************************** */
+/*                                                                  */
+/*                             Commands                             */
+/*                                                                  */
+/* **************************************************************** */
+
+int cmd_help(char *arg)
+{
+	printf(
+		"\n"
+		"\th - Print help page with all commands\n"
+		"\tq - Quit\n"
+		"\n"
+		"\ts - Search for records in the database\n"
+		"\tc - Create a new record in the database\n"
+		"\te - Edit a record in the database\n"
+		"\tr - Remove a record from the database\n"
+		"\n"
+	);
+	return 0;
+}
+
+int cmd_quit(char *arg)
+{
+	return -1;
+}
+
+int cmd_search(char *arg)
+{
+	register int i = 0;
+	char *field = arg;
+
+	while (arg[i] && !whitespace(arg[i]))
+		i++;
+
+	if (arg[i])
+		arg[i++] = '\0';
+
+	if (strlen(field) < 1)
+		field = "name";
+
+	if (strcmp(field, "name") != 0 && strcmp(field, "address") != 0 &&
+	    strcmp(field, "mobile") != 0 && strcmp(field, "home") != 0) {
+		printf("Error: unknown field specified. Available are: name, address, mobile, home\n");
+		return 1;
+	}
+
+	char search[32];
+	snprintf(search, sizeof(search), "(search:%s) > ", field);
+	char *answer = readline(search);
+
+	if (strcmp(field, "mobile") == 0 || strcmp(field, "home") == 0) {
+		// grow string if it does not fit suffix
+		if (sizeof(field) < strlen(field) + strlen("_phone")) {
+			field = (char*) malloc(strlen(field) + strlen("_phone"));
+		}
+
+		strcat(field, "_phone");
+	}
+
+	char sql[128];
+	if (!snprintf(sql, sizeof(sql), "SELECT * FROM `ppl` WHERE %s LIKE ?;", field)) {
+		printf("Error: could not write sql statement.\n");
+		return 1;
+	}
+
+	sqlite3_stmt *stmt;
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL)) {
+		printf("Error: could not create sqlite statement.\n");
+		return 1;
+	}
+
+	char to_bind[sizeof(answer) + 2];
+	snprintf(to_bind, sizeof(to_bind), "%%%s%%", answer);
+
+	sqlite3_bind_text(stmt, 1, to_bind, -1, NULL);
+
+	printf("\n");
+
+	int j = 0;
+	while (sqlite3_step(stmt) != SQLITE_DONE) {
+		const unsigned char *name = sqlite3_column_text(stmt, 0);
+		const unsigned char *address = sqlite3_column_text(stmt, 1);
+		const unsigned char *mobile = sqlite3_column_text(stmt, 2);
+		const unsigned char *home = sqlite3_column_text(stmt, 3);
+		const unsigned char *description = sqlite3_column_text(stmt, 4);
+
+		// TODO: edit description such that it word wraps
+		if (j > 0) {
+			printf("\n");
+		}
+		printf(
+			"\t==== Result: #%d\n"
+			"\t       Name: %s\n"
+			"\t    Address: %s\n"
+			"\t     Mobile: %s\n"
+			"\tHouse Phone: %s\n"
+			"\tDescription: %s\n",
+			j + 1, name, address, mobile, home, description
+		);
+		j++;
+	}
+
+	// If i remains Zero, we encountered no matching columns
+	if (j == 0) {
+		printf("\tCould not find any matching Entries.\n");
+	}
+
+	printf("\n");
+
+	sqlite3_finalize(stmt);
+	return 0;
+
+	return 0;
+}
+
+int cmd_create(char *arg)
+{
+	UNUSED(arg);
+
+	printf("\n");
+	char *name = readline("\tEnter Name: ");
+	char *address = readline("\tEnter Address: ");
+	char *mobile = readline("\tEnter Mobile Number: ");
+	char *home = readline("\tEnter House Phone Number: ");
+	char *description = readline("\tEnter Description: ");
 
 	printf("\tInserting...\n");
 
@@ -127,101 +372,6 @@ int command_create(sqlite3 *db)
 	return 0;
 }
 
-int command_search(sqlite3 *db, char *raw_line, size_t raw_line_size)
-{
-	char *field = strtok(NULL, " ");
-	if (field == NULL) {
-		field = "name";
-	}
-
-	if (strcmp(field, "name") != 0 && strcmp(field, "address") != 0 &&
-			strcmp(field, "mobile") != 0 && strcmp(field, "home") != 0) {
-		printf("Error: unknown field specified. Available are: name, address, mobile, home\n");
-		return 1;
-	}
-
-	printf("(search:%s) > ", field);
-	if (input(raw_line, raw_line_size) != 0) return 1;
-
-	if (strcmp(field, "mobile") == 0 || strcmp(field, "home") == 0) {
-		// grow string if it does not fit suffix
-		if (sizeof(field) < strlen(field) + strlen("_phone")) {
-			field = (char*) malloc(strlen(field) + strlen("_phone"));
-		}
-
-		strcat(field, "_phone");
-	}
-
-	// TODO: currently only searching exact matches, at including statements
-	char sql[128];
-	if (!snprintf(sql, sizeof(sql), "SELECT * FROM `ppl` WHERE %s LIKE ?;", field)) {
-		printf("Error: could not write sql statement.\n");
-		return 1;
-	}
-
-	sqlite3_stmt *stmt;
-	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL)) {
-		printf("Error: could not create sqlite statement.\n");
-		return 1;
-	}
-
-	char to_bind[raw_line_size];
-	snprintf(to_bind, raw_line_size, "%%%s%%", raw_line);
-
-	sqlite3_bind_text(stmt, 1, to_bind, -1, NULL);
-
-	printf("\n");
-
-	int i = 0;
-	while (sqlite3_step(stmt) != SQLITE_DONE) {
-		const unsigned char *name = sqlite3_column_text(stmt, 0);
-		const unsigned char *address = sqlite3_column_text(stmt, 1);
-		const unsigned char *mobile = sqlite3_column_text(stmt, 2);
-		const unsigned char *home = sqlite3_column_text(stmt, 3);
-		const unsigned char *description = sqlite3_column_text(stmt, 4);
-
-		// TODO: edit description such that it word wraps
-		if (i > 0) {
-			printf("\n");
-		}
-		printf(
-			"\t==== Result: #%d\n"
-			"\t       Name: %s\n"
-			"\t    Address: %s\n"
-			"\t     Mobile: %s\n"
-			"\tHouse Phone: %s\n"
-			"\tDescription: %s\n",
-			i + 1, name, address, mobile, home, description
-		);
-		i++;
-	}
-
-	// If i remains Zero, we encountered no matching columns
-	if (i == 0) {
-		printf("\tCould not find any matching Entries.\n");
-	}
-
-	printf("\n");
-
-	sqlite3_finalize(stmt);
-	return 0;
-}
-
-int input(char *str, size_t size)
-{
-	if (!fgets(str, size, stdin)) {
-		printf("Error: could not read line.\n");
-		return 1;
-	}
-
-	trim(str);
-	return 0;
-}
-
-void trim(char *str)
-{
-	int i = strlen(str) - 1;
-	if (str[i] == '\n') {
-		str[i] = '\0';
-	}
-}
+// TODO:
+int cmd_edit(char *arg) { return 0; }
+int cmd_remove(char *arg) { return 0; }
