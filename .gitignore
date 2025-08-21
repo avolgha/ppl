@@ -1,6 +1,6 @@
 # Binary
+dist/
 nob
-dist/ppl
 
 # Database
 storage.db

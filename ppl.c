@@ -45,12 +45,12 @@ int cmd_remove(char *);
 static sqlite3 *db;
 
 Command commands[] = {
-	{ "h", cmd_help,   "Print help page" },
-	{ "q", cmd_quit,   "Quit" },
-	{ "s", cmd_search, "Search for records" },
+	{ "h", cmd_help,   "Print help page"     },
+	{ "q", cmd_quit,   "Quit"                },
+	{ "s", cmd_search, "Search for records"  },
 	{ "c", cmd_create, "Create a new record" },
-	{ "e", cmd_edit,   "Edit a record" },
-	{ "r", cmd_remove, "Remove a record" },
+	{ "e", cmd_edit,   "Edit a record"       },
+	{ "r", cmd_remove, "Remove a record"     },
 	{ (char*) NULL, (rl_icpfunc_t*) NULL, (char*) NULL }
 };
 
@@ -321,7 +321,7 @@ int cmd_search(char *arg)
 		j++;
 	}
 
-	// If i remains Zero, we encountered no matching columns
+	// If j remains Zero, we encountered no matching columns
 	if (j == 0) {
 		printf("\tCould not find any matching Entries.\n");
 	}
