@@ -1,6 +1,7 @@
 # Binary
 dist/
 nob
+nob.old
 
 # Database
 storage.db

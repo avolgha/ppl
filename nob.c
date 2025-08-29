@@ -12,7 +12,7 @@ main (int argc, char **argv)
 	Nob_Cmd cmd = {0};
 	nob_cc(&cmd);
 	nob_cc_flags(&cmd);
-	nob_cmd_append(&cmd, "-l", "sqlite3", "-l", "readline");
+	nob_cmd_append(&cmd, "-l", "sqlite3", "-l", "readline", "-l", "uuid");
 	nob_cc_output(&cmd, "dist/ppl");
 	nob_cc_inputs(&cmd, "ppl.c");
 

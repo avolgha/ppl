@@ -8,8 +8,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sqlite3.h>
+#include <uuid/uuid.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+
+/* **************************************************************** */
+/*                                                                  */
+/*                           Definitions                            */
+/*                                                                  */
+/* **************************************************************** */
 
 #define UNUSED(x) ((void) (x))
 
@@ -27,20 +34,20 @@ typedef struct {
 	char *description;
 } Entry;
 
-char *dupstr(char *);
-char *stripwhite(char *);
+char *dupstr(char*);
+char *stripwhite(char*);
 
-Command *cli_find_command(char *);
-int cli_execute(char *);
-char **cli_completor(const char *, int, int);
-char *cli_command_generator(const char *, int);
+Command *cli_find_command(char*);
+int cli_execute(char*);
+char **cli_completor(const char*, int, int);
+char *cli_command_generator(const char*, int);
 
-int cmd_help(char *);
-int cmd_quit(char *);
-int cmd_search(char *);
-int cmd_create(char *);
-int cmd_edit(char *);
-int cmd_remove(char *);
+int cmd_help(char*);
+int cmd_quit(char*);
+int cmd_search(char*);
+int cmd_create(char*);
+int cmd_edit(char*);
+int cmd_remove(char*);
 
 static sqlite3 *db;
 
@@ -54,8 +61,13 @@ Command commands[] = {
 	{ (char*) NULL, (rl_icpfunc_t*) NULL, (char*) NULL }
 };
 
-// FIXME:
-// NOTE: This program is currently vulnerable to SQL-injection.
+/* **************************************************************** */
+/*                                                                  */
+/*                               Main                               */
+/*                                                                  */
+/* **************************************************************** */
+
+// FIXME: This program is currently vulnerable to SQL-injection.
 int main()
 {
 	rl_readline_name = "ppl";
@@ -68,7 +80,8 @@ int main()
 
 	char *err;
 	if (sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS `ppl` ("
-					"name VARCHAR(32) UNIQUE PRIMARY KEY,"
+					"id TEXT UNIQUE PRIMARY KEY,"
+					"name VARCHAR(32),"
 					"address VARCHAR(128),"
 					"mobile_phone VARCHAR(32),"
 					"house_phone VARCHAR(32),"
@@ -218,6 +231,17 @@ char *stripwhite(char *text)
 	return s;
 }
 
+char *random_uuid()
+{
+	uuid_t uuid_bin;
+	char *uuid = malloc(37);
+
+	uuid_generate_random(uuid_bin);
+	uuid_unparse_lower(uuid_bin, uuid);
+
+	return uuid;
+}
+
 /* **************************************************************** */
 /*                                                                  */
 /*                             Commands                             */
@@ -279,7 +303,11 @@ int cmd_search(char *arg)
 	}
 
 	char sql[128];
-	if (!snprintf(sql, sizeof(sql), "SELECT * FROM `ppl` WHERE %s LIKE ?;", field)) {
+	if (!snprintf(
+				sql,
+				sizeof(sql),
+				"SELECT * FROM `ppl` WHERE %s LIKE ?;",
+				field)) {
 		printf("Error: could not write sql statement.\n");
 		return 1;
 	}
@@ -299,24 +327,28 @@ int cmd_search(char *arg)
 
 	int j = 0;
 	while (sqlite3_step(stmt) != SQLITE_DONE) {
-		const unsigned char *name = sqlite3_column_text(stmt, 0);
-		const unsigned char *address = sqlite3_column_text(stmt, 1);
-		const unsigned char *mobile = sqlite3_column_text(stmt, 2);
-		const unsigned char *home = sqlite3_column_text(stmt, 3);
-		const unsigned char *description = sqlite3_column_text(stmt, 4);
+		const unsigned char *real_id     = sqlite3_column_text(stmt, 0);
+		const unsigned char *name        = sqlite3_column_text(stmt, 1);
+		const unsigned char *address     = sqlite3_column_text(stmt, 2);
+		const unsigned char *mobile      = sqlite3_column_text(stmt, 3);
+		const unsigned char *home        = sqlite3_column_text(stmt, 4);
+		const unsigned char *description = sqlite3_column_text(stmt, 5);
+
+		char *id = dupstr((char *)(real_id));
+		id[5] = '\0';
 
 		// TODO: edit description such that it word wraps
 		if (j > 0) {
 			printf("\n");
 		}
 		printf(
-			"\t==== Result: #%d\n"
+			"\t==== Result: #%d (%s)\n"
 			"\t       Name: %s\n"
 			"\t    Address: %s\n"
 			"\t     Mobile: %s\n"
 			"\tHouse Phone: %s\n"
 			"\tDescription: %s\n",
-			j + 1, name, address, mobile, home, description
+			j + 1, id, name, address, mobile, home, description
 		);
 		j++;
 	}
@@ -329,8 +361,6 @@ int cmd_search(char *arg)
 	printf("\n");
 
 	sqlite3_finalize(stmt);
-	return 0;
-
 	return 0;
 }
 
@@ -347,7 +377,8 @@ int cmd_create(char *arg)
 
 	printf("\tInserting...\n");
 
-	char sql[2048] = "INSERT INTO `ppl` (name, address, mobile_phone, house_phone, description) VALUES (?, ?, ?, ?, ?);";
+	char sql[2048] = "INSERT INTO `ppl` (id, name, address, mobile_phone,"
+		"house_phone, description) VALUES (?, ?, ?, ?, ?, ?);";
 
 	sqlite3_stmt *stmt;
 	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL)) {
@@ -355,11 +386,12 @@ int cmd_create(char *arg)
 		return 1;
 	}
 
-	sqlite3_bind_text(stmt, 1, name, -1, NULL);
-	sqlite3_bind_text(stmt, 2, address, -1, NULL);
-	sqlite3_bind_text(stmt, 3, mobile, -1, NULL);
-	sqlite3_bind_text(stmt, 4, home, -1, NULL);
-	sqlite3_bind_text(stmt, 5, description, -1, NULL);
+	sqlite3_bind_text(stmt, 1, random_uuid(), -1, NULL);
+	sqlite3_bind_text(stmt, 2, name, -1, NULL);
+	sqlite3_bind_text(stmt, 3, address, -1, NULL);
+	sqlite3_bind_text(stmt, 4, mobile, -1, NULL);
+	sqlite3_bind_text(stmt, 5, home, -1, NULL);
+	sqlite3_bind_text(stmt, 6, description, -1, NULL);
 
 	if (sqlite3_step(stmt) != SQLITE_DONE) {
 		printf("\nError: encountered sql error: %s\n", sqlite3_errmsg(db));
@@ -372,6 +404,49 @@ int cmd_create(char *arg)
 	return 0;
 }
 
+int cmd_remove(char *arg)
+{
+	register int i = 0;
+	char *id = arg;
+
+	while (arg[i] && !whitespace(arg[i]))
+		i++;
+
+	if (arg[i])
+		arg[i++] = '\0';
+
+	if (strlen(id) != 5) {
+		printf("\n\tUsage: r <id>\n\n");
+		return 1;
+	}
+
+	char sql[128];
+	if (!snprintf(
+				sql,
+				sizeof(sql),
+				"DELETE FROM `ppl` WHERE id LIKE ?;")) {
+		printf("Error: could not write sql statement.\n");
+		return 1;
+	}
+
+	sqlite3_stmt *stmt;
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL)) {
+		printf("Error: could not create sqlite statement.\n");
+		return 1;
+	}
+
+	char *to_bind = malloc(7);
+	snprintf(to_bind, sizeof(to_bind), "%s%%", id);
+
+	sqlite3_bind_text(stmt, 1, to_bind, -1, NULL);
+
+	sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
+
+	printf("\n\tRecord deleted.\n\n");
+
+	return 0;
+}
+
 // TODO:
-int cmd_edit(char *arg) { return 0; }
-int cmd_remove(char *arg) { return 0; }
+int cmd_edit  (char *arg) { UNUSED(arg); return 0; }
