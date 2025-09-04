@@ -36,7 +36,7 @@ typedef struct {
 
 char *dupstr(char*);
 char *stripwhite(char*);
-char *random_uuid(char*);
+char *random_uuid();
 
 Command *cli_find_command(char*);
 int cli_execute(char*);
@@ -251,6 +251,7 @@ char *random_uuid()
 
 int cmd_help(char *arg)
 {
+	UNUSED(arg);
 	printf(
 		"\n"
 		"\th - Print help page with all commands\n"
@@ -267,6 +268,7 @@ int cmd_help(char *arg)
 
 int cmd_quit(char *arg)
 {
+	UNUSED(arg);
 	return -1;
 }
 
@@ -437,7 +439,7 @@ int cmd_remove(char *arg)
 	}
 
 	char *to_bind = malloc(7);
-	snprintf(to_bind, sizeof(to_bind), "%s%%", id);
+	snprintf(to_bind, sizeof(to_bind) - 1, "%s%%", id);
 
 	sqlite3_bind_text(stmt, 1, to_bind, -1, NULL);
 
@@ -449,5 +451,128 @@ int cmd_remove(char *arg)
 	return 0;
 }
 
-// TODO:
-int cmd_edit  (char *arg) { UNUSED(arg); return 0; }
+int cmd_edit(char *arg)
+{
+	register int i = 0;
+	char *id = arg;
+
+	while (arg[i] && !whitespace(arg[i]))
+		i++;
+
+	if (arg[i])
+		arg[i++] = '\0';
+
+	if (strlen(id) != 5) {
+		printf("\n\tUsage: e <id>\n\n");
+		return 1;
+	}
+
+	char sql[128];
+	if (!snprintf(
+				sql,
+				sizeof(sql),
+				"SELECT * FROM `ppl` WHERE id LIKE ?;")) {
+		printf("Error: could not write sql statement.\n");
+		return 1;
+	}
+
+	sqlite3_stmt *stmt;
+	if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL)) {
+		printf("Error: could not create sqlite statement.\n");
+		return 1;
+	}
+
+	char *to_bind = malloc(7);
+	snprintf(to_bind, sizeof(to_bind) - 1, "%s%%", id);
+
+	sqlite3_bind_text(stmt, 1, to_bind, -1, NULL);
+
+	Entry entry;
+	char *entry_id;
+
+	int j = 0;
+	while (sqlite3_step(stmt) != SQLITE_DONE) {
+		const unsigned char *real_id     = sqlite3_column_text(stmt, 0);
+		const unsigned char *name        = sqlite3_column_text(stmt, 1);
+		const unsigned char *address     = sqlite3_column_text(stmt, 2);
+		const unsigned char *mobile      = sqlite3_column_text(stmt, 3);
+		const unsigned char *home        = sqlite3_column_text(stmt, 4);
+		const unsigned char *description = sqlite3_column_text(stmt, 5);
+
+		entry_id           = dupstr((char *)(real_id));
+		entry.name         = dupstr((char *)(name));
+		entry.address      = dupstr((char *)(address));
+		entry.mobile_phone = dupstr((char *)(mobile));
+		entry.house_phone  = dupstr((char *)(home));
+		entry.description  = dupstr((char *)(description));
+
+		j++;
+	}
+
+	sqlite3_finalize(stmt);
+
+	if (j < 1) {
+		printf("Error: there was no record found with the given id.\n");
+		return 1;
+	} else if (j > 1) {
+		// TODO
+		printf("Error: there are multiple records found. This is bad.\n");
+		return 1;
+	}
+
+	printf("\n\tPlease enter a new value or leave it empty to keep it.\n\n");
+
+	printf("\t       Name > %s\n", entry.name);
+	char *new_name = readline("\t            > ");
+	if (strlen(new_name) < 1)
+		new_name = entry.name;
+
+	printf("\t    Address > %s\n", entry.address);
+	char *new_address = readline("\t            > ");
+	if (strlen(new_address) < 1)
+		new_address = entry.address;
+
+	printf("\t     Mobile > %s\n", entry.mobile_phone);
+	char *new_mobile = readline("\t            > ");
+	if (strlen(new_mobile) < 1)
+		new_mobile = entry.mobile_phone;
+
+	printf("\t Home Phone > %s\n", entry.house_phone);
+	char *new_home = readline("\t            > ");
+	if (strlen(new_home) < 1)
+		new_home = entry.house_phone;
+
+	printf("\tDescription > %s\n", entry.description);
+	char *new_description = readline("\t            > ");
+	if (strlen(new_description) < 1)
+		new_description = entry.description;
+
+	printf("\tInserting...\n");
+
+	char sql2[2048] = "UPDATE `ppl` SET name = ?, address = ?, mobile_phone = ?,"
+		"house_phone = ?, description = ? WHERE id = ?;";
+
+	sqlite3_stmt *stmt2;
+	if (sqlite3_prepare_v2(db, sql2, -1, &stmt2, NULL)) {
+		printf("\nError: could not create sqlite statement.");
+		return 1;
+	}
+
+	sqlite3_bind_text(stmt2, 1, new_name, -1, NULL);
+	sqlite3_bind_text(stmt2, 2, new_address, -1, NULL);
+	sqlite3_bind_text(stmt2, 3, new_mobile, -1, NULL);
+	sqlite3_bind_text(stmt2, 4, new_home, -1, NULL);
+	sqlite3_bind_text(stmt2, 5, new_description, -1, NULL);
+	sqlite3_bind_text(stmt2, 6, entry_id, -1, NULL);
+
+	if (sqlite3_step(stmt2) != SQLITE_DONE) {
+		printf("\nError: encountered sql error: %s\n", sqlite3_errmsg(db));
+		return 1;
+	}
+
+	printf("\tInserted record into database.\n\n");
+
+	sqlite3_finalize(stmt2);
+
+	return 0;
+}
