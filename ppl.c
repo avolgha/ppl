@@ -36,6 +36,7 @@ typedef struct {
 
 char *dupstr(char*);
 char *stripwhite(char*);
+char *random_uuid(char*);
 
 Command *cli_find_command(char*);
 int cli_execute(char*);
